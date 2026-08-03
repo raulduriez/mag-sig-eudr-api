@@ -8,7 +8,6 @@ from google import genai
 
 app = FastAPI(title="API Debida Diligencia EUDR - Whisp Engine")
 
-# Habilitar CORS completo
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -29,7 +28,6 @@ async def add_cors_headers(request: Request, call_next):
     response.headers["Access-Control-Allow-Headers"] = "*"
     return response
 
-# Obtener la API Key desde la variable de entorno de Render
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 
 class DatosSolicitud(BaseModel):
@@ -67,7 +65,7 @@ def calcular_centroide(geojson: dict):
 def home():
     return {
         "estado": "Servidor Activo",
-        "mensaje": "API de Debida Diligencia EUDR conectada al Motor Whisp con SDK Oficial Gemini Cloud - MAG / DPTO SIG"
+        "mensaje": "API de Debida Diligencia EUDR conectada al Motor Whisp con SDK Oficial Gemini - MAG / DPTO SIG"
     }
 
 @app.options("/api/analizar")
@@ -130,20 +128,19 @@ Compara imágenes 2020 vs 2024 para verificar el área.
 ==================================================
 """
 
-        # Inicialización del cliente oficial
+        # Usando el SDK oficial de Google GenAI
         client = genai.Client(api_key=GEMINI_API_KEY)
         
-        # Generación de contenido usando el modelo recomendado
+        # Modelo estándar actual recomendado por Google
         response = client.models.generate_content(
             model="gemini-2.5-flash",
             contents=prompt_sistema,
         )
 
         tiempo_total = round(time.time() - tiempo_inicio, 2)
-        dictamen_texto = response.text.strip()
 
         dictamen_final = (
-            f"{dictamen_texto}\n\n"
+            f"{response.text.strip()}\n\n"
             f"Ejecución completada en {tiempo_total} segundos (Gemini Cloud API)\n\n"
             f"Cargando las capas resultantes...\n"
             f"Algoritmo '1. Análisis de Riesgo EUDR (Whisp)' finalizado exitosamente."
@@ -151,7 +148,7 @@ Compara imágenes 2020 vs 2024 para verificar el área.
         return {"exito": True, "dictamen": dictamen_final}
 
     except Exception as e:
-        print(f"❌ ERROR INTERNO EN BACKEND: {str(e)}")
+        print(f"❌ ERROR INTERNO: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Error en servidor backend: {str(e)}")
 
 if __name__ == "__main__":
