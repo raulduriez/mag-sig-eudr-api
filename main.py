@@ -8,7 +8,7 @@ from google import genai
 
 app = FastAPI(title="API Debida Diligencia EUDR - Whisp Engine")
 
-# Configuración de CORS para permitir la conexión desde Netlify
+# Configuración de CORS
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -29,7 +29,6 @@ async def add_cors_headers(request: Request, call_next):
     response.headers["Access-Control-Allow-Headers"] = "*"
     return response
 
-# Obtener la API Key guardada en las variables de entorno de Render
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 
 class DatosSolicitud(BaseModel):
@@ -41,7 +40,6 @@ class DatosSolicitud(BaseModel):
     geojson: dict
 
 def calcular_centroide(geojson: dict):
-    """Calcula las coordenadas del centroide del polígono suministrado."""
     try:
         coords = []
         if geojson.get("type") == "FeatureCollection":
@@ -68,7 +66,7 @@ def calcular_centroide(geojson: dict):
 def home():
     return {
         "estado": "Servidor Activo",
-        "mensaje": "API de Debida Diligencia EUDR conectada al Motor Whisp con Gemini 1.5 Flash - MAG / DPTO SIG"
+        "mensaje": "API de Debida Diligencia EUDR conectada al Motor Whisp con Gemini Cloud - MAG / DPTO SIG"
     }
 
 @app.options("/api/analizar")
@@ -131,12 +129,12 @@ Compara imágenes 2020 vs 2024 para verificar el área.
 ==================================================
 """
 
-        # Inicializar el cliente oficial con la API Key
+        # Inicialización del cliente SDK
         client = genai.Client(api_key=GEMINI_API_KEY)
         
-        # Uso del modelo estable de producción
+        # Modelo oficial compatible con el cliente `google-genai`
         response = client.models.generate_content(
-            model="gemini-1.5-flash",
+            model="gemini-2.5-flash",
             contents=prompt_sistema,
         )
 
