@@ -125,7 +125,7 @@ Compara imágenes 2020 vs 2024 para verificar el área.
 """
 
         # Petición HTTP a la API REST de Google Gemini
-        url_gemini = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={GEMINI_API_KEY}"
+        url_gemini = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={GEMINI_API_KEY}"
         
         payload = {
             "contents": [{
