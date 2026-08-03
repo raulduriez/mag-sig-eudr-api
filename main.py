@@ -207,4 +207,5 @@ Compara imágenes 2020 vs 2024 para verificar la parcela.
     return {"exito": True, "dictamen": dictamen_final}
 
 if __name__ == "__main__":
+    import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8000)
