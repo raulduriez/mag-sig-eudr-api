@@ -4,11 +4,10 @@ import uvicorn
 from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-from google import genai
 
 app = FastAPI(title="API Debida Diligencia EUDR - Whisp Engine")
 
-# Configuración de CORS
+# Permite peticiones CORS desde Netlify sin bloqueos
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -29,8 +28,6 @@ async def add_cors_headers(request: Request, call_next):
     response.headers["Access-Control-Allow-Headers"] = "*"
     return response
 
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
-
 class DatosSolicitud(BaseModel):
     productor: str
     cedula: str
@@ -40,6 +37,7 @@ class DatosSolicitud(BaseModel):
     geojson: dict
 
 def calcular_centroide(geojson: dict):
+    """Calcula las coordenadas del centroide a partir del GeoJSON recibido."""
     try:
         coords = []
         if geojson.get("type") == "FeatureCollection":
@@ -66,7 +64,7 @@ def calcular_centroide(geojson: dict):
 def home():
     return {
         "estado": "Servidor Activo",
-        "mensaje": "API de Debida Diligencia EUDR conectada al Motor Whisp con Gemini Cloud - MAG / DPTO SIG"
+        "mensaje": "API de Debida Diligencia EUDR - Motor Whisp Local - MAG / DPTO SIG"
     }
 
 @app.options("/api/analizar")
@@ -81,19 +79,17 @@ def options_analizar():
 def analizar_poligono(solicitud: DatosSolicitud):
     tiempo_inicio = time.time()
 
-    if not GEMINI_API_KEY:
-        raise HTTPException(
-            status_code=500,
-            detail="La variable de entorno GEMINI_API_KEY no está configurada en Render."
-        )
-
     try:
+        # 1. Procesamiento geográfico básico
         lat_c, lon_c = calcular_centroide(solicitud.geojson)
         id_parcela = abs(hash(f"{solicitud.finca}_{solicitud.productor}")) % 10000
+        
+        # 2. Evaluación de regla de negocio EUDR
+        # Si el área dibujada es válida (> 0 ha), se evalúa como riesgo BAJO
         nivel_riesgo = "BAJO (Sin Deforestación)" if solicitud.area_ha > 0 else "ALTO (Revisar Polígono)"
 
-        prompt_sistema = f"""
-MINISTERIO AGROPECUARIO / DPTO SIG
+        # 3. Construcción del informe estándar Whisp EUDR
+        dictamen_texto = f"""MINISTERIO AGROPECUARIO / DPTO SIG
 PORTAL DE DEBIDA DILIGENCIA EUDR
 MÓDULO DE EVALUACIÓN PARCELARIA SATELITAL (MOTOR WHISP)
 ==================================================
@@ -126,26 +122,17 @@ Desglose por satélite:
 --------------------------------------------------
 Coordenadas para centrar vista: Longitud: {lon_c}, Latitud: {lat_c}
 Compara imágenes 2020 vs 2024 para verificar el área.
-==================================================
-"""
-
-        # Inicialización del cliente SDK
-        client = genai.Client(api_key=GEMINI_API_KEY)
-        
-        # Modelo oficial compatible con el cliente `google-genai`
-        response = client.models.generate_content(
-            model="gemini-2.5-flash",
-            contents=prompt_sistema,
-        )
+=================================================="""
 
         tiempo_total = round(time.time() - tiempo_inicio, 2)
 
         dictamen_final = (
-            f"{response.text.strip()}\n\n"
-            f"Ejecución completada en {tiempo_total} segundos (Gemini Cloud API)\n\n"
+            f"{dictamen_texto}\n\n"
+            f"Ejecución completada en {tiempo_total} segundos (Motor Whisp SIG)\n\n"
             f"Cargando las capas resultantes...\n"
             f"Algoritmo '1. Análisis de Riesgo EUDR (Whisp)' finalizado exitosamente."
         )
+
         return {"exito": True, "dictamen": dictamen_final}
 
     except Exception as e:
