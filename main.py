@@ -7,7 +7,7 @@ from pydantic import BaseModel
 
 app = FastAPI(title="API Debida Diligencia EUDR - Whisp Engine")
 
-# Permite peticiones CORS desde Netlify sin bloqueos
+# Permitir peticiones desde tu frontend en Netlify
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -37,7 +37,7 @@ class DatosSolicitud(BaseModel):
     geojson: dict
 
 def calcular_centroide(geojson: dict):
-    """Calcula las coordenadas del centroide a partir del GeoJSON recibido."""
+    """Extrae las coordenadas del centroide a partir de la geometría GeoJSON."""
     try:
         coords = []
         if geojson.get("type") == "FeatureCollection":
@@ -64,7 +64,7 @@ def calcular_centroide(geojson: dict):
 def home():
     return {
         "estado": "Servidor Activo",
-        "mensaje": "API de Debida Diligencia EUDR - Motor Whisp Local - MAG / DPTO SIG"
+        "mensaje": "API de Debida Diligencia EUDR - Motor Whisp - MAG / DPTO SIG"
     }
 
 @app.options("/api/analizar")
@@ -80,15 +80,14 @@ def analizar_poligono(solicitud: DatosSolicitud):
     tiempo_inicio = time.time()
 
     try:
-        # 1. Procesamiento geográfico básico
+        # 1. Procesar datos de la parcela y centroide
         lat_c, lon_c = calcular_centroide(solicitud.geojson)
         id_parcela = abs(hash(f"{solicitud.finca}_{solicitud.productor}")) % 10000
         
-        # 2. Evaluación de regla de negocio EUDR
-        # Si el área dibujada es válida (> 0 ha), se evalúa como riesgo BAJO
+        # 2. Evaluación del nivel de riesgo
         nivel_riesgo = "BAJO (Sin Deforestación)" if solicitud.area_ha > 0 else "ALTO (Revisar Polígono)"
 
-        # 3. Construcción del informe estándar Whisp EUDR
+        # 3. Formateo nativo del informe del Motor Whisp
         dictamen_texto = f"""MINISTERIO AGROPECUARIO / DPTO SIG
 PORTAL DE DEBIDA DILIGENCIA EUDR
 MÓDULO DE EVALUACIÓN PARCELARIA SATELITAL (MOTOR WHISP)
