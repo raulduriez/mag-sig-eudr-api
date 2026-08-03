@@ -6,9 +6,9 @@ from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
-app = FastAPI(title="API Debida Diligencia EUDR - Whisp API v2.1.0 Integration")
+app = FastAPI(title="API Debida Diligencia EUDR - Integración Whisp API v2.1.0")
 
-# Configuración de CORS
+# Configuración de CORS para permitir conexiones desde Netlify
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -29,7 +29,7 @@ async def add_cors_headers(request: Request, call_next):
     response.headers["Access-Control-Allow-Headers"] = "*"
     return response
 
-# Obtener variables de entorno en Render
+# Obtener variables de entorno configuradas en Render
 WHISP_API_KEY = os.getenv("WHISP_API_KEY")
 WHISP_BASE_URL = os.getenv("WHISP_ENDPOINT", "https://whisp.openforis.org/submit/geojson")
 
@@ -42,7 +42,7 @@ class DatosSolicitud(BaseModel):
     geojson: dict
 
 def calcular_centroide(geojson: dict):
-    """Calcula el centroide del polígono."""
+    """Calcula las coordenadas del centroide a partir del GeoJSON."""
     try:
         coords = []
         if geojson.get("type") == "FeatureCollection":
@@ -87,6 +87,7 @@ def analizar_poligono(solicitud: DatosSolicitud):
     lat_c, lon_c = calcular_centroide(solicitud.geojson)
     id_parcela = abs(hash(f"{solicitud.finca}_{solicitud.productor}")) % 10000
 
+    # Variables predeterminadas
     deforestacion_ha = 0.0
     hansen_ha = 0.0
     tmf_ha = 0.0
@@ -94,7 +95,7 @@ def analizar_poligono(solicitud: DatosSolicitud):
     porcentaje_riesgo = 0.0
     nivel_riesgo = "BAJO (Sin Deforestación)"
 
-    # Petición a la API de Whisp usando x-api-key
+    # 1. Consulta real a la API de Whisp
     if WHISP_API_KEY:
         try:
             headers = {
@@ -102,37 +103,47 @@ def analizar_poligono(solicitud: DatosSolicitud):
                 "Content-Type": "application/json"
             }
 
-            # Formato estándar de envío de la geometría GeoJSON
             payload = solicitud.geojson
 
-            res = requests.post(WHISP_BASE_URL, json=payload, headers=headers, timeout=30)
+            res = requests.post(WHISP_BASE_URL, json=payload, headers=headers, timeout=35)
 
             if res.status_code == 200:
                 respuesta_whisp = res.json()
                 
-                # Extracción de datos del envelope de respuesta Whisp v2.1.0
+                # Extracción del envoltorio (envelope) oficial de Whisp
+                datos_lista = []
                 if respuesta_whisp.get("code") == "analysis_completed" and "data" in respuesta_whisp:
-                    datos_analisis = respuesta_whisp["data"]
+                    datos_lista = respuesta_whisp["data"]
+                elif isinstance(respuesta_whisp, list):
+                    datos_lista = respuesta_whisp
+
+                if isinstance(datos_lista, list) and len(datos_lista) > 0:
+                    item = datos_lista[0]
                     
-                    if isinstance(datos_analisis, list) and len(datos_analisis) > 0:
-                        item = datos_analisis[0]
-                        deforestacion_ha = item.get("deforestation_ha", item.get("loss_ha", 0.0))
-                        hansen_ha = item.get("gfc_loss_ha", 0.0)
-                        tmf_ha = item.get("tmf_loss_ha", 0.0)
-                        radd_ha = item.get("radd_alerts_ha", 0.0)
+                    # Mapeo directo de las columnas reales de Whisp API
+                    hansen_ha = float(item.get("GFC_loss_after_2020", 0.0))
+                    tmf_ha = float(item.get("TMF_def_after_2020", 0.0))
+                    radd_ha = float(item.get("RADD_after_2020", 0.0))
+                    
+                    # Suma total de área deforestada post-2020
+                    deforestacion_ha = hansen_ha + tmf_ha + radd_ha
 
-                if solicitud.area_ha > 0:
-                    porcentaje_riesgo = round((deforestacion_ha / solicitud.area_ha) * 100, 2)
+                    # Evaluación de indicadores de perturbación y nivel de riesgo
+                    ind_04 = str(item.get("Ind_04_disturbance_after_2020", "no")).lower()
+                    risk_crop = str(item.get("risk_pcrop", "low")).lower()
 
-                if deforestacion_ha > 0.01:
-                    nivel_riesgo = "ALTO (Presencia de Deforestación post-2020)"
-                else:
-                    nivel_riesgo = "BAJO (Sin Deforestación detectada)"
+                    if deforestacion_ha > 0.01 or ind_04 == "yes" or risk_crop == "high":
+                        nivel_riesgo = "ALTO (Presencia de Deforestación post-2020)"
+                    else:
+                        nivel_riesgo = "BAJO (Sin Deforestación detectada)"
+
+            if solicitud.area_ha > 0:
+                porcentaje_riesgo = round((deforestacion_ha / solicitud.area_ha) * 100, 2)
 
         except Exception as e:
-            print(f"⚠️ Error en la consulta a Whisp API: {str(e)}")
+            print(f"⚠️ Error al procesar respuesta de Whisp API: {str(e)}")
 
-    # Formateo del Dictamen
+    # 2. Formateo del Dictamen de Salida
     dictamen_texto = f"""MINISTERIO AGROPECUARIO / DPTO SIG
 PORTAL DE DEBIDA DILIGENCIA EUDR
 MÓDULO DE EVALUACIÓN PARCELARIA SATELITAL (OPENFORIS WHISP API v2.1.0)
@@ -172,7 +183,7 @@ Compara imágenes 2020 vs 2024 para verificar la parcela.
 
     dictamen_final = (
         f"{dictamen_texto}\n\n"
-        f"Ejecución completada en {tiempo_total} segundos (OpenForis Whisp API)\n\n"
+        f"Ejecución completada en {tiempo_total} segundos (OpenForis Whisp Engine)\n\n"
         f"Cargando las capas resultantes...\n"
         f"Algoritmo '1. Análisis de Riesgo EUDR (Whisp)' finalizado exitosamente."
     )
