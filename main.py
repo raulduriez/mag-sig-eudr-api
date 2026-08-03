@@ -60,7 +60,7 @@ def calcular_centroide(geojson: dict):
         return 12.8654, -85.2072
 
 def normalizar_geojson_para_whisp(geojson_in: dict):
-    """Garantiza que el GeoJSON tenga el formato FeatureCollection que exige Whisp."""
+    """Garantiza que el GeoJSON tenga la estructura FeatureCollection requerida por Whisp."""
     if geojson_in.get("type") == "FeatureCollection":
         return geojson_in
     elif geojson_in.get("type") == "Feature":
@@ -117,16 +117,15 @@ def analizar_poligono(solicitud: DatosSolicitud):
             }
 
             payload = normalizar_geojson_para_whisp(solicitud.geojson)
-
             res = requests.post(WHISP_BASE_URL, json=payload, headers=headers, timeout=35)
 
             print(f"📡 Estado HTTP de Whisp: {res.status_code}")
 
-            if res.status_code == 200:
+            if res.status_code in [200, 201]:
                 respuesta_whisp = res.json()
                 
                 datos_lista = []
-                if isinstance(respuesta_whisp, dict) and respuesta_whisp.get("code") == "analysis_completed":
+                if isinstance(respuesta_whisp, dict) and respuesta_whisp.get("code") in ["analysis_completed", "success"]:
                     datos_lista = respuesta_whisp.get("data", [])
                 elif isinstance(respuesta_whisp, list):
                     datos_lista = respuesta_whisp
@@ -134,6 +133,7 @@ def analizar_poligono(solicitud: DatosSolicitud):
                 if isinstance(datos_lista, list) and len(datos_lista) > 0:
                     item = datos_lista[0]
                     
+                    # Extracción estricta según el esquema CSV oficial de Whisp
                     hansen_ha = float(item.get("GFC_loss_after_2020", item.get("gfc_loss_ha", 0.0)))
                     tmf_ha = float(item.get("TMF_def_after_2020", item.get("tmf_loss_ha", 0.0)))
                     radd_ha = float(item.get("RADD_after_2020", item.get("radd_alerts_ha", 0.0)))
@@ -148,14 +148,18 @@ def analizar_poligono(solicitud: DatosSolicitud):
                     else:
                         nivel_riesgo = "BAJO (Sin Deforestación detectada)"
             else:
-                print(f"⚠️ Error devuelto por Whisp API: {res.text}")
+                print(f"⚠️ Error devuelto por Whisp API (HTTP {res.status_code}): {res.text}")
 
         except Exception as e:
             print(f"❌ Excepción al conectar con Whisp API: {str(e)}")
+    else:
+        print("⚠️ Advertencia: WHISP_API_KEY no encontrada en las variables de entorno.")
 
+    # Cálculo dinámico del porcentaje de afectación
     if solicitud.area_ha > 0:
         porcentaje_riesgo = round((deforestacion_ha / solicitud.area_ha) * 100, 2)
 
+    # Construcción del dictamen formal
     dictamen_texto = f"""MINISTERIO AGROPECUARIO / DPTO SIG
 PORTAL DE DEBIDA DILIGENCIA EUDR
 MÓDULO DE EVALUACIÓN PARCELARIA SATELITAL (OPENFORIS WHISP API v2.1.0)
