@@ -1,3 +1,4 @@
+import os
 import time
 import requests
 import uvicorn
@@ -7,7 +8,7 @@ from pydantic import BaseModel
 
 app = FastAPI(title="API Debida Diligencia EUDR - Whisp Engine")
 
-# Permite peticiones desde cualquier origen (Netlify, local, etc.)
+# Habilitar CORS para que Netlify se conecte sin bloqueos
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -16,9 +17,8 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Middleware para forzar encabezados CORS y omitir la pantalla de aviso de Localtunnel
 @app.middleware("http")
-async def add_cors_and_tunnel_headers(request: Request, call_next):
+async def add_cors_headers(request: Request, call_next):
     if request.method == "OPTIONS":
         response = Response()
     else:
@@ -27,11 +27,11 @@ async def add_cors_and_tunnel_headers(request: Request, call_next):
     response.headers["Access-Control-Allow-Origin"] = "*"
     response.headers["Access-Control-Allow-Methods"] = "*"
     response.headers["Access-Control-Allow-Headers"] = "*"
-    response.headers["Bypass-Tunnel-Remainder"] = "true"
-    response.headers["bypass-tunnel-reminder"] = "true"
     return response
 
-# Modelo de datos recibido desde el formulario web
+# PEGA AQUÍ TU API KEY DE GEMINI (O configúrala como variable de entorno)
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "TU_API_KEY_AQUI")
+
 class DatosSolicitud(BaseModel):
     productor: str
     cedula: str
@@ -41,7 +41,6 @@ class DatosSolicitud(BaseModel):
     geojson: dict
 
 def calcular_centroide(geojson: dict):
-    """Calcula las coordenadas del centroide resistiendo distintas estructuras GeoJSON."""
     try:
         coords = []
         if geojson.get("type") == "FeatureCollection":
@@ -61,20 +60,18 @@ def calcular_centroide(geojson: dict):
             return 12.8654, -85.2072
 
         return round(sum(lats) / len(lats), 6), round(sum(lons) / len(lons), 6)
-    except Exception as e:
-        print(f"⚠️ Advertencia calculando centroide: {e}")
+    except Exception:
         return 12.8654, -85.2072
 
 @app.get("/")
 def home():
     return {
         "estado": "Servidor Activo",
-        "mensaje": "API de Debida Diligencia EUDR conectada al Motor Whisp - MAG / DPTO SIG"
+        "mensaje": "API de Debida Diligencia EUDR conectada al Motor Whisp con Gemini Cloud - MAG / DPTO SIG"
     }
 
 @app.options("/api/analizar")
 def options_analizar():
-    """Responde a las solicitudes preflight CORS del navegador."""
     return Response(headers={
         "Access-Control-Allow-Origin": "*",
         "Access-Control-Allow-Methods": "*",
@@ -88,7 +85,6 @@ def analizar_poligono(solicitud: DatosSolicitud):
     try:
         lat_c, lon_c = calcular_centroide(solicitud.geojson)
         id_parcela = abs(hash(f"{solicitud.finca}_{solicitud.productor}")) % 10000
-
         nivel_riesgo = "BAJO (Sin Deforestación)" if solicitud.area_ha > 0 else "ALTO (Revisar Polígono)"
 
         prompt_sistema = f"""
@@ -128,21 +124,25 @@ Compara imágenes 2020 vs 2024 para verificar el área.
 ==================================================
 """
 
-        url_ollama = "http://127.0.0.1:11434/api/generate"
+        # Petición HTTP a la API REST de Google Gemini
+        url_gemini = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={GEMINI_API_KEY}"
+        
         payload = {
-            "model": "llama3.2",
-            "prompt": prompt_sistema,
-            "stream": False
+            "contents": [{
+                "parts": [{"text": prompt_sistema}]
+            }]
         }
 
-        response = requests.post(url_ollama, json=payload, timeout=120)
+        response = requests.post(url_gemini, json=payload, timeout=30)
         tiempo_total = round(time.time() - tiempo_inicio, 2)
 
         if response.status_code == 200:
-            dictamen_texto = response.json().get("response", "").strip()
+            data = response.json()
+            dictamen_texto = data["candidates"][0]["content"]["parts"][0]["text"].strip()
+            
             dictamen_final = (
                 f"{dictamen_texto}\n\n"
-                f"Ejecución completada en {tiempo_total} segundos\n\n"
+                f"Ejecución completada en {tiempo_total} segundos (Gemini Cloud API)\n\n"
                 f"Cargando las capas resultantes...\n"
                 f"Algoritmo '1. Análisis de Riesgo EUDR (Whisp)' finalizado exitosamente."
             )
@@ -150,18 +150,12 @@ Compara imágenes 2020 vs 2024 para verificar el área.
         else:
             raise HTTPException(
                 status_code=500, 
-                detail=f"Ollama respondió con error HTTP {response.status_code}"
+                detail=f"Gemini API devolvió error HTTP {response.status_code}: {response.text}"
             )
 
-    except requests.exceptions.ConnectionError:
-        raise HTTPException(
-            status_code=500,
-            detail="No se pudo comunicar con Ollama. Verifica que el servicio esté ejecutándose localmente."
-        )
     except Exception as e:
         print(f"❌ ERROR INTERNO: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Error interno en backend: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error en servidor backend: {str(e)}")
 
 if __name__ == "__main__":
-    print("\n🚀 Servidor levantado en: http://127.0.0.1:8000 (Presiona Ctrl+C para detener)\n")
-    uvicorn.run(app, host="127.0.0.1", port=8000)
+    uvicorn.run(app, host="0.0.0.0", port=8000)
