@@ -6,8 +6,9 @@ from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
-app = FastAPI(title="API Debida Diligencia EUDR - Integración Whisp API")
+app = FastAPI(title="API Debida Diligencia EUDR - Whisp API v2.1.0 Integration")
 
+# Configuración de CORS
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -28,9 +29,9 @@ async def add_cors_headers(request: Request, call_next):
     response.headers["Access-Control-Allow-Headers"] = "*"
     return response
 
-# Variables de entorno en Render
+# Obtener variables de entorno en Render
 WHISP_API_KEY = os.getenv("WHISP_API_KEY")
-WHISP_ENDPOINT = os.getenv("WHISP_ENDPOINT", "https://api.whisp.land/v1/analyze")
+WHISP_BASE_URL = os.getenv("WHISP_ENDPOINT", "https://whisp.openforis.org/submit/geojson")
 
 class DatosSolicitud(BaseModel):
     productor: str
@@ -41,6 +42,7 @@ class DatosSolicitud(BaseModel):
     geojson: dict
 
 def calcular_centroide(geojson: dict):
+    """Calcula el centroide del polígono."""
     try:
         coords = []
         if geojson.get("type") == "FeatureCollection":
@@ -56,6 +58,9 @@ def calcular_centroide(geojson: dict):
         lons = [p[0] for p in coords if isinstance(p, list) and len(p) >= 2]
         lats = [p[1] for p in coords if isinstance(p, list) and len(p) >= 2]
 
+        if not lons or not lats:
+            return 12.8654, -85.2072
+
         return round(sum(lats) / len(lats), 6), round(sum(lons) / len(lons), 6)
     except Exception:
         return 12.8654, -85.2072
@@ -64,7 +69,7 @@ def calcular_centroide(geojson: dict):
 def home():
     return {
         "estado": "Servidor Activo",
-        "mensaje": "API EUDR conectada al servicio nativo de Whisp - MAG / DPTO SIG"
+        "mensaje": "API EUDR conectada con OpenForis Whisp API v2.1.0 - MAG / DPTO SIG"
     }
 
 @app.options("/api/analizar")
@@ -82,55 +87,55 @@ def analizar_poligono(solicitud: DatosSolicitud):
     lat_c, lon_c = calcular_centroide(solicitud.geojson)
     id_parcela = abs(hash(f"{solicitud.finca}_{solicitud.productor}")) % 10000
 
-    # Variables de respuesta por defecto / fallback
     deforestacion_ha = 0.0
-    porcentaje_riesgo = 0.0
     hansen_ha = 0.0
     tmf_ha = 0.0
     radd_ha = 0.0
+    porcentaje_riesgo = 0.0
     nivel_riesgo = "BAJO (Sin Deforestación)"
 
-    # 1. Consulta real a la API de Whisp
+    # Petición a la API de Whisp usando x-api-key
     if WHISP_API_KEY:
         try:
             headers = {
-                "Authorization": f"Bearer {WHISP_API_KEY}",
+                "x-api-key": WHISP_API_KEY,
                 "Content-Type": "application/json"
             }
-            
-            payload_whisp = {
-                "geometry": solicitud.geojson,
-                "cutoff_date": "2020-12-31",
-                "datasets": ["gfc", "tmf", "radd"]
-            }
 
-            res = requests.post(WHISP_ENDPOINT, json=payload_whisp, headers=headers, timeout=25)
+            # Formato estándar de envío de la geometría GeoJSON
+            payload = solicitud.geojson
+
+            res = requests.post(WHISP_BASE_URL, json=payload, headers=headers, timeout=30)
 
             if res.status_code == 200:
-                data_whisp = res.json()
+                respuesta_whisp = res.json()
                 
-                # Extraer métricas reales devueltas por Whisp
-                deforestacion_ha = data_whisp.get("total_deforestation_ha", 0.0)
-                hansen_ha = data_whisp.get("hansen_loss_ha", 0.0)
-                tmf_ha = data_whisp.get("tmf_loss_ha", 0.0)
-                radd_ha = data_whisp.get("radd_alerts_ha", 0.0)
-                
+                # Extracción de datos del envelope de respuesta Whisp v2.1.0
+                if respuesta_whisp.get("code") == "analysis_completed" and "data" in respuesta_whisp:
+                    datos_analisis = respuesta_whisp["data"]
+                    
+                    if isinstance(datos_analisis, list) and len(datos_analisis) > 0:
+                        item = datos_analisis[0]
+                        deforestacion_ha = item.get("deforestation_ha", item.get("loss_ha", 0.0))
+                        hansen_ha = item.get("gfc_loss_ha", 0.0)
+                        tmf_ha = item.get("tmf_loss_ha", 0.0)
+                        radd_ha = item.get("radd_alerts_ha", 0.0)
+
                 if solicitud.area_ha > 0:
                     porcentaje_riesgo = round((deforestacion_ha / solicitud.area_ha) * 100, 2)
 
-                # Clasificación oficial Whisp
-                if deforestacion_ha > 0.05 or data_whisp.get("risk_level") == "HIGH":
+                if deforestacion_ha > 0.01:
                     nivel_riesgo = "ALTO (Presencia de Deforestación post-2020)"
                 else:
                     nivel_riesgo = "BAJO (Sin Deforestación detectada)"
 
         except Exception as e:
-            print(f"⚠️ Error al conectar con Whisp API: {str(e)}")
+            print(f"⚠️ Error en la consulta a Whisp API: {str(e)}")
 
-    # 2. Formatear Dictamen con datos procesados
+    # Formateo del Dictamen
     dictamen_texto = f"""MINISTERIO AGROPECUARIO / DPTO SIG
 PORTAL DE DEBIDA DILIGENCIA EUDR
-MÓDULO DE EVALUACIÓN PARCELARIA SATELITAL (MOTOR WHISP API)
+MÓDULO DE EVALUACIÓN PARCELARIA SATELITAL (OPENFORIS WHISP API v2.1.0)
 ==================================================
 
 1. RESUMEN DE LA PARCELA:
@@ -152,7 +157,7 @@ MÓDULO DE EVALUACIÓN PARCELARIA SATELITAL (MOTOR WHISP API)
 Pérdida de cobertura arbórea posterior al 31/12/2020.
 Superficie Estimada en Riesgo: {deforestacion_ha:.4f} ha ({porcentaje_riesgo}% de la finca)
 
-Desglose por satélite (Whisp Datasets):
+Desglose por satélite (Google Earth Engine / OpenForis Whisp):
 - GFC (Hansen) post-2020: {hansen_ha:.4f} ha
 - TMF (JRC) post-2020: {tmf_ha:.4f} ha
 - Alertas RADD post-2020: {radd_ha:.4f} ha
@@ -167,7 +172,7 @@ Compara imágenes 2020 vs 2024 para verificar la parcela.
 
     dictamen_final = (
         f"{dictamen_texto}\n\n"
-        f"Ejecución completada en {tiempo_total} segundos (Whisp API Service)\n\n"
+        f"Ejecución completada en {tiempo_total} segundos (OpenForis Whisp API)\n\n"
         f"Cargando las capas resultantes...\n"
         f"Algoritmo '1. Análisis de Riesgo EUDR (Whisp)' finalizado exitosamente."
     )
